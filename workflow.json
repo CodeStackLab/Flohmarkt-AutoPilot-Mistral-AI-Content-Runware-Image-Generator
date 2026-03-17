@@ -1,1 +1,164 @@
-{}
+{
+  "name": "Flohmarkt AutoPilot — 2x Daily AI Article Publisher (9AM + 4PM)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        },
+        "timezone": "Europe/Berlin"
+      },
+      "id": "sched-daily",
+      "name": "Daily 9AM Germany",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, 160]
+    },
+    {
+      "id": "init-run",
+      "name": "Init Run & Pick Topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 160],
+      "parameters": {
+        "jsCode": "const gd = $getWorkflowStaticData('global'); function safeLoad(key) { try { return JSON.parse(gd[key] || '[]'); } catch(e) { return []; } } let EX_topics = safeLoad('EX_topics'); let EX_titles = safeLoad('EX_titles'); if (EX_topics.length > 500) EX_topics = EX_topics.slice(-400); if (EX_titles.length > 500) EX_titles = EX_titles.slice(-400); gd['EX_topics'] = JSON.stringify(EX_topics); gd['EX_titles'] = JSON.stringify(EX_titles); gd['SESSION_retryCount'] = '0'; const ALL_TOPICS = [ { slug:'porzellan-flohmarkt', title:'Porzellan auf dem Flohmarkt erkennen und bewerten', angle:'buying-specific' }, { slug:'silberbesteck-troedelmarkt', title:'Silberbesteck auf dem Trödelmarkt: Echt oder versilbert?', angle:'buying-specific' }, { slug:'alte-uhren-flohmarkt', title:'Alte Armbanduhren und Taschenuhren auf Flohmärkten bewerten', angle:'buying-specific' }, { slug:'schallplatten-vinyl-flohmarkt', title:'Wertvolle Schallplatten und Vinyl-Raritäten auf Flohmärkten finden', angle:'buying-specific' }, { slug:'vintage-spielzeug-wert', title:'Vintage-Spielzeug aus den 70ern und 80ern: Wert und Erkennung', angle:'buying-specific' }, { slug:'flohmarkt-reselling-anfänger', title:'Reselling vom Flohmarkt: So startest du als Anfänger', angle:'reselling' }, { slug:'gewinn-flohmarkt-online-verkauf', title:'Flohmarktfunde online verkaufen: Plattformen und Strategien', angle:'reselling' } ]; const available = ALL_TOPICS.filter(t => !EX_topics.includes(t.slug)); if (available.length === 0) { gd['EX_topics'] = JSON.stringify([]); } const chosen = available.length > 0 ? available[Math.floor(Math.random() * available.length)] : ALL_TOPICS[0]; return [{ json: { topicSlug: chosen.slug, topicTitle: chosen.title, topicAngle: chosen.angle } }];"
+      }
+    },
+    {
+      "id": "build-mistral-request",
+      "name": "Build Mistral Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 160],
+      "parameters": {
+        "jsCode": "const { topicTitle, topicSlug, topicAngle } = $json; const gd = $getWorkflowStaticData('global'); function safeLoad(key) { try { return JSON.parse(gd[key] || '[]'); } catch(e) { return []; } } const EX_titles = safeLoad('EX_titles'); const recentTitles = EX_titles.slice(-20).join('\\\
+'); const body = { model: 'mistral-small-latest', messages: [ { role: 'system', content: 'Du bist ein erfahrener SEO-Texter für Flohmarkt-Trödelmarkt.de. WICHTIG: Schreibe AUSSCHLIESSLICH auf DEUTSCH. OUTPUT FORMAT: pure JSON object with keys: title, slug, metaDescription, keywords (array), imagePrompt, articleHTML' }, { role: 'user', content: 'Schreibe einen hochwertigen deutschen SEO-Artikel über: ' + topicTitle + ' Angle: ' + topicAngle } ], max_tokens: 9000, temperature: 0.65, response_format: { type: 'json_object' } }; return [{ json: { ...($json), _mistralBody: body } }];"
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_MISTRAL_API_KEY_HERE" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json._mistralBody) }}",
+        "options": { "timeout": 90000 }
+      },
+      "id": "call-mistral-ai",
+      "name": "Mistral AI — Generate Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 160],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.runware.ai/v1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_RUNWARE_API_KEY_HERE" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json._runwarePayload) }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "call-runware",
+      "name": "Runware — Generate Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 8000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-WORDPRESS-SITE.com/wp-json/wp/v2/media",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic YOUR_BASE64_WORDPRESS_CREDENTIALS" },
+            { "name": "Content-Disposition", "value": "={{ 'attachment; filename=flohmarkt-' + Date.now() + '.jpg' }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "imageData",
+        "options": { "timeout": 30000 }
+      },
+      "id": "upload-wp-media",
+      "name": "Upload Image to WP Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 80],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-WORDPRESS-SITE.com/wp-json/wp/v2/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Basic YOUR_BASE64_WORDPRESS_CREDENTIALS" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json._postBody) }}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "publish-post",
+      "name": "Publish to WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2480, 160],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Daily 9AM Germany": {
+      "main": [[{"node": "Init Run & Pick Topic", "type": "main", "index": 0}]]
+    },
+    "Init Run & Pick Topic": {
+      "main": [[{"node": "Build Mistral Request", "type": "main", "index": 0}]]
+    },
+    "Build Mistral Request": {
+      "main": [[{"node": "Mistral AI — Generate Content", "type": "main", "index": 0}]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "id": "FlohmarktMistralRunware01",
+  "tags": [],
+  "_NOTE": "IMPORTANT: Replace all YOUR_*_HERE placeholders with your actual API keys before importing this workflow into n8n. This is a sanitized version for sharing. The original full workflow with all Code nodes is in the original JSON file."
+}
